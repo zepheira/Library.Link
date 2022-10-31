@@ -9,14 +9,6 @@ import urllib.request
 from itertools import *
 import collections.abc
 
-import requests
-try:
-    from cachecontrol import CacheControl
-    from cachecontrol.caches.file_cache import FileCache
-    CACHEDIR = '.web_cache'
-except ImportError:
-    CACHEDIR = None
-
 from versa.driver import memory
 from versa import I, VERSA_BASEIRI, ORIGIN, RELATIONSHIP, TARGET, ATTRIBUTES
 from versa.reader import rdfalite
@@ -31,49 +23,12 @@ from rdflib import BNode
 
 from amara3 import iri
 from amara3.uxml import tree
-from amara3.uxml import xml
+from amara3.uxml import xmliter
 from amara3.uxml.treeutil import *
 from amara3.uxml import html5
 
 RDFTYPE = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#type'
 SCHEMAORG = 'http://schema.org/'
-
-
-def all_sites(sitemap_url='http://library.link/harvest/sitemap.xml'):
-    '''
-    >>> from librarylink.util import all_sites
-    >>> [ s.host for s in all_sites() if 'denverlibrary' in s.host ]
-    ['link.denverlibrary.org']
-    '''
-    #FIXME: Avoid accumulating all the nodes, which will require improvements to xml.treesequence
-    @coroutine
-    def sink(accumulator):
-        while True:
-            e = yield
-            loc = next(select_name(e, 'loc'))
-            lastmod = next(select_name(e, 'lastmod'))
-            s = liblink_site()
-            s.sitemap = loc.xml_value
-            s.url, _, tail = s.sitemap.partition('harvest/sitemap.xml')
-            s.base_url = s.url #Legacy property name
-            #Early warning for funky URLs breaking stuff downstream
-            assert not tail
-            protocol, s.host, path, query, fragment = iri.split_uri_ref(s.sitemap)
-            s.lastmod = lastmod.xml_value
-            accumulator.append(s)
-
-    nodes = []
-    ts = xml.treesequence(('sitemapindex', 'sitemap'), sink(nodes))
-    if hasattr (all_sites, 'cachedir'):
-        sess = CacheControl(requests.Session(), cache=FileCache(all_sites.cachedir))
-    else:
-        sess = CacheControl(requests.Session())
-    result = sess.get(sitemap_url)
-    ts.parse(result.text)
-    yield from nodes
-
-
-if CACHEDIR: all_sites.cachedir = '.web_cache'
 
 
 def load_rdfa_page(site, max_retries=1):
@@ -487,31 +442,3 @@ class liblink_set(collections.abc.MutableSet):
     def __repr__(self):
         s = 'RAWSET: ' + repr(self._rawset) + '\n' + 'EXCLUSIONS: ' + repr(self._exclusions)
         return s
-
-
-class liblink_site(object):
-    '''
-    High-level (sitemap-style) information about a Library.Link site
-    
-    >>> from librarylink.util import liblink_site
-    >>> s = liblink_site('http://link.worthingtonlibraries.org')
-    >>> s.url
-    'http://link.worthingtonlibraries.org'
-    >>> s.host
-    'link.worthingtonlibraries.org'
-    >>> s.sitemap
-    'http://link.worthingtonlibraries.org/harvest/sitemap.xml'
-    >>> s.lastmod
-    '2018-04-26T22:58:59Z'
-    '''
-    def __init__(self, baseurl=None):
-        if baseurl:
-            model, _ = load_rdfa_page(baseurl)
-            if not model:
-                raise RuntimeError(baseurl, 'doesn\'t appear to be a Library.Link site')
-            #<dd property="dcterms:modified">2018-04-17T04:17:32Z</dd>
-            
-            self.lastmod = next(versautil.lookup(model, None, 'http://purl.org/dc/terms/modified'), None)
-            self.sitemap = iri.absolutize('/harvest/sitemap.xml', baseurl)
-            self.url = baseurl
-            protocol, self.host, path, query, fragment = iri.split_uri_ref(baseurl)
